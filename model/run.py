@@ -180,7 +180,11 @@ if __name__ == '__main__':
     parser.add_argument("--do_lower_case", action='store_true', default=True)
     parser.add_argument("--train_batch_size", default=4, type=int)
     parser.add_argument("--eval_batch_size", default=20, type=int)
-    parser.add_argument("--learning_rate", default=5e-5, type=float, )
+    parser.add_argument(
+        "--learning_rate",
+        default=5e-5,
+        type=float,
+    )
     parser.add_argument("--num_train_epochs", default=30, type=float)
     parser.add_argument("--beam_width", default=4, type=int)
     parser.add_argument("--warmup_proportion", default=0.1, type=float)
@@ -189,11 +193,19 @@ if __name__ == '__main__':
     parser.add_argument("--save_all_models", action='store_true', default=True)
     args = parser.parse_args()
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logging.basicConfig(
+        format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
+        datefmt='%m/%d/%Y %H:%M:%S',
+        level=logging.INFO)
 
-    logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
-                        datefmt='%m/%d/%Y %H:%M:%S',
-                        level=logging.INFO)
+    use_xla = False
+    try:
+        import torch_xla.core.xla_model as xm
+        device = xm.xla_device()
+        use_xla = True
+    except:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info(f"***** Using device={device} *****")
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -205,14 +217,16 @@ if __name__ == '__main__':
     torch.backends.cudnn.benchmark = False
 
     if not args.do_train and not args.do_eval:
-        raise ValueError("At least one of `do_train` or `do_eval` must be True.")
+        raise ValueError(
+            "At least one of `do_train` or `do_eval` must be True.")
     if args.hard and args.base:
         raise ValueError("Hard and base cannot both be set")
 
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
 
-    tokenizer = BertTokenizer.from_pretrained(args.bert_model, do_lower_case=args.do_lower_case)
+    tokenizer = BertTokenizer.from_pretrained(args.bert_model,
+                                              do_lower_case=args.do_lower_case)
 
     dataset = SpiderDataset()
 
@@ -224,115 +238,180 @@ if __name__ == '__main__':
         make_features(tokenizer)
     else:
         for x in [feature_name(x) for x in feature_list]:
-            tokenizer.basic_tokenizer.never_split += (x,)
+            tokenizer.basic_tokenizer.never_split += (x, )
 
     eval_examples = dataset.get_dev_examples(args.data_dir)
-    eval_features = dataset.convert_examples_to_features(eval_examples, 512, tokenizer, mode='dev')
+    eval_features = dataset.convert_examples_to_features(eval_examples,
+                                                         512,
+                                                         tokenizer,
+                                                         mode='dev')
 
-    max_item_len = max([max([len(x) for x in f.labels['item_pos']]) for f in eval_features])
+    max_item_len = max(
+        [max([len(x) for x in f.labels['item_pos']]) for f in eval_features])
     all_item_pos = []
     for each in eval_features:
         cur_item_pos = each.labels['item_pos'] + [[-100] * max_item_len]
-        now = pad_sequence([torch.tensor(x) for x in cur_item_pos], batch_first=True, padding_value=-100)
+        now = pad_sequence([torch.tensor(x) for x in cur_item_pos],
+                           batch_first=True,
+                           padding_value=-100)
         all_item_pos.append(now[:-1])
-    all_item_pos = pad_sequence(all_item_pos, batch_first=True, padding_value=-100)
+    all_item_pos = pad_sequence(all_item_pos,
+                                batch_first=True,
+                                padding_value=-100)
     all_item_pos = pad_sequence(all_item_pos, batch_first=True)
 
-    eval_data = TensorDataset(torch.tensor([f.input_ids for f in eval_features], dtype=torch.long),
-                              torch.tensor([f.input_mask for f in eval_features], dtype=torch.long),
-                              torch.tensor([f.segment_ids for f in eval_features], dtype=torch.long),
-                              pad_sequence([torch.tensor(f.labels['que_tok_pos']) for f in eval_features],
-                                           batch_first=True),
-                              all_item_pos,
-                              pad_sequence([torch.tensor(f.labels['belongs'], dtype=torch.long) for f in eval_features],
-                                           batch_first=True),
-                              pad_sequence(
-                                  [torch.tensor(f.labels['key_info'], dtype=torch.float) for f in eval_features],
-                                  batch_first=True),
-                              pad_sequence(
-                                  [torch.tensor(f.labels['key_pairs'], dtype=torch.long) for f in eval_features],
-                                  batch_first=True, padding_value=-100),
-                              torch.tensor([len(f.labels['que_tok_pos']) for f in eval_features], dtype=torch.long),
-                              torch.tensor([f.labels['col_num'] for f in eval_features], dtype=torch.long),
-                              torch.tensor([f.labels['tbl_num'] for f in eval_features], dtype=torch.long),
-                              pad_sequence([torch.tensor(f.labels['ct_linking']) for f in eval_features],
-                                           batch_first=True, padding_value=-100),
-                              pad_sequence([torch.tensor(f.labels['val_linking']) for f in eval_features],
-                                           batch_first=True, padding_value=-100))
+    eval_data = TensorDataset(
+        torch.tensor([f.input_ids for f in eval_features], dtype=torch.long),
+        torch.tensor([f.input_mask for f in eval_features], dtype=torch.long),
+        torch.tensor([f.segment_ids for f in eval_features], dtype=torch.long),
+        pad_sequence(
+            [torch.tensor(f.labels['que_tok_pos']) for f in eval_features],
+            batch_first=True), all_item_pos,
+        pad_sequence([
+            torch.tensor(f.labels['belongs'], dtype=torch.long)
+            for f in eval_features
+        ],
+                     batch_first=True),
+        pad_sequence([
+            torch.tensor(f.labels['key_info'], dtype=torch.float)
+            for f in eval_features
+        ],
+                     batch_first=True),
+        pad_sequence([
+            torch.tensor(f.labels['key_pairs'], dtype=torch.long)
+            for f in eval_features
+        ],
+                     batch_first=True,
+                     padding_value=-100),
+        torch.tensor([len(f.labels['que_tok_pos']) for f in eval_features],
+                     dtype=torch.long),
+        torch.tensor([f.labels['col_num'] for f in eval_features],
+                     dtype=torch.long),
+        torch.tensor([f.labels['tbl_num'] for f in eval_features],
+                     dtype=torch.long),
+        pad_sequence(
+            [torch.tensor(f.labels['ct_linking']) for f in eval_features],
+            batch_first=True,
+            padding_value=-100),
+        pad_sequence(
+            [torch.tensor(f.labels['val_linking']) for f in eval_features],
+            batch_first=True,
+            padding_value=-100))
 
     eval_sampler = SequentialSampler(eval_data)
-    eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=args.eval_batch_size)
+    eval_dataloader = DataLoader(eval_data,
+                                 sampler=eval_sampler,
+                                 batch_size=args.eval_batch_size)
 
     if args.do_train:
 
         num_train_optimization_steps = None
         train_examples = dataset.get_train_examples(args.data_dir)
-        train_features = dataset.convert_examples_to_features(train_examples, 512, tokenizer)
+        train_features = dataset.convert_examples_to_features(
+            train_examples, 512, tokenizer)
         logger.info("***** Begin training *****")
-        max_item_len = max([max([len(x) for x in f.labels['item_pos']]) for f in train_features])
+        max_item_len = max([
+            max([len(x) for x in f.labels['item_pos']]) for f in train_features
+        ])
 
         all_item_pos = []
         for each in train_features:
             cur_item_pos = each.labels['item_pos'] + [[-100] * max_item_len]
-            now = pad_sequence([torch.tensor(x) for x in cur_item_pos], batch_first=True, padding_value=-100)
+            now = pad_sequence([torch.tensor(x) for x in cur_item_pos],
+                               batch_first=True,
+                               padding_value=-100)
             all_item_pos.append(now[:-1])
-        all_item_pos = pad_sequence(all_item_pos, batch_first=True, padding_value=-100)
+        all_item_pos = pad_sequence(all_item_pos,
+                                    batch_first=True,
+                                    padding_value=-100)
         all_item_pos = pad_sequence(all_item_pos, batch_first=True)
 
-        train_data = TensorDataset(torch.tensor([f.input_ids for f in train_features], dtype=torch.long),
-                                   torch.tensor([f.input_mask for f in train_features], dtype=torch.long),
-                                   torch.tensor([f.segment_ids for f in train_features], dtype=torch.long),
-                                   pad_sequence([torch.tensor(f.labels['que_tok_pos']) for f in train_features],
-                                                batch_first=True),
-                                   all_item_pos,
-                                   pad_sequence(
-                                       [torch.tensor(f.labels['belongs'], dtype=torch.long) for f in train_features],
-                                       batch_first=True),
-                                   pad_sequence(
-                                       [torch.tensor(f.labels['key_info'], dtype=torch.float) for f in train_features],
-                                       batch_first=True),
-                                   pad_sequence(
-                                       [torch.tensor(f.labels['key_pairs'], dtype=torch.float) for f in train_features],
-                                       batch_first=True, padding_value=-100),
-                                   torch.tensor([len(f.labels['que_tok_pos']) for f in train_features],
-                                                dtype=torch.long),
-                                   torch.tensor([f.labels['col_num'] for f in train_features], dtype=torch.long),
-                                   torch.tensor([f.labels['tbl_num'] for f in train_features], dtype=torch.long),
-                                   pad_sequence([torch.tensor(f.labels['ct_linking']) for f in train_features],
-                                                batch_first=True,
-                                                padding_value=-100),
-                                   pad_sequence([torch.tensor(f.labels['val_linking']) for f in train_features],
-                                                batch_first=True,
-                                                padding_value=-100),
-                                   pad_sequence([torch.tensor(f.labels['seq']) for f in train_features],
-                                                batch_first=True,
-                                                padding_value=-100),
-                                   pad_sequence([torch.tensor(f.labels['agg']) for f in train_features],
-                                                batch_first=True,
-                                                padding_value=-100)
-                                   )
+        train_data = TensorDataset(
+            torch.tensor([f.input_ids for f in train_features],
+                         dtype=torch.long),
+            torch.tensor([f.input_mask for f in train_features],
+                         dtype=torch.long),
+            torch.tensor([f.segment_ids for f in train_features],
+                         dtype=torch.long),
+            pad_sequence([
+                torch.tensor(f.labels['que_tok_pos']) for f in train_features
+            ],
+                         batch_first=True), all_item_pos,
+            pad_sequence([
+                torch.tensor(f.labels['belongs'], dtype=torch.long)
+                for f in train_features
+            ],
+                         batch_first=True),
+            pad_sequence([
+                torch.tensor(f.labels['key_info'], dtype=torch.float)
+                for f in train_features
+            ],
+                         batch_first=True),
+            pad_sequence([
+                torch.tensor(f.labels['key_pairs'], dtype=torch.float)
+                for f in train_features
+            ],
+                         batch_first=True,
+                         padding_value=-100),
+            torch.tensor(
+                [len(f.labels['que_tok_pos']) for f in train_features],
+                dtype=torch.long),
+            torch.tensor([f.labels['col_num'] for f in train_features],
+                         dtype=torch.long),
+            torch.tensor([f.labels['tbl_num'] for f in train_features],
+                         dtype=torch.long),
+            pad_sequence(
+                [torch.tensor(f.labels['ct_linking']) for f in train_features],
+                batch_first=True,
+                padding_value=-100),
+            pad_sequence([
+                torch.tensor(f.labels['val_linking']) for f in train_features
+            ],
+                         batch_first=True,
+                         padding_value=-100),
+            pad_sequence(
+                [torch.tensor(f.labels['seq']) for f in train_features],
+                batch_first=True,
+                padding_value=-100),
+            pad_sequence(
+                [torch.tensor(f.labels['agg']) for f in train_features],
+                batch_first=True,
+                padding_value=-100))
 
         train_sampler = SequentialSampler(train_data)
-        train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.train_batch_size)
+        train_dataloader = DataLoader(train_data,
+                                      sampler=train_sampler,
+                                      batch_size=args.train_batch_size)
 
-        num_train_optimization_steps = int(len(train_examples) / args.train_batch_size) * args.num_train_epochs
+        num_train_optimization_steps = int(
+            len(train_examples) /
+            args.train_batch_size) * args.num_train_epochs
 
         param_optimizer = list(model.named_parameters())
         no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
-        optimizer_grouped_parameters = [
-            {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
-            {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
-        ]
+        optimizer_grouped_parameters = [{
+            'params': [
+                p for n, p in param_optimizer
+                if not any(nd in n for nd in no_decay)
+            ],
+            'weight_decay':
+            0.01
+        }, {
+            'params':
+            [p for n, p in param_optimizer if any(nd in n for nd in no_decay)],
+            'weight_decay':
+            0.0
+        }]
         optimizer = BertAdam(optimizer_grouped_parameters,
                              lr=args.learning_rate,
                              warmup=args.warmup_proportion,
                              t_total=num_train_optimization_steps)
 
         desc_str = "ITERATION - sql_loss: {:.8f}, linking_loss: {:.8f}"
-        pbar = tqdm(
-            initial=0, leave=False, total=len(train_dataloader),
-            desc=desc_str.format(0, 0)
-        )
+        pbar = tqdm(initial=0,
+                    leave=False,
+                    total=len(train_dataloader),
+                    desc=desc_str.format(0, 0))
 
         nb_tr_steps = 0
         tr_loss = 0
@@ -344,8 +423,10 @@ if __name__ == '__main__':
             tr_sql_loss = 0
             tr_linking_loss = 0
             nb_tr_steps = 0
-            for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration")):
+            for step, batch in enumerate(
+                    tqdm(train_dataloader, desc="Iteration")):
                 batch = tuple(t.to(device) for t in batch)
+                optimizer.zero_grad()
 
                 sql_loss, linking_loss = model(*batch)
                 loss = sql_loss + linking_loss
@@ -361,35 +442,53 @@ if __name__ == '__main__':
                     tr_linking_loss += linking_loss.item()
                 nb_tr_steps += 1
                 optimizer.step()
-                optimizer.zero_grad()
 
-            eval_scores, pred_links, pred_sqls = eval(eval_examples, eval_features, eval_dataloader)
-            epoch_output_dir = os.path.join(args.output_dir,
-                                            'epoch_%d_%.4f_%.4f' % (epoch, eval_scores['loss'], eval_scores['acc']))
+                if use_xla:
+                  xm.mark_step()
+
+            eval_scores, pred_links, pred_sqls = eval(eval_examples,
+                                                      eval_features,
+                                                      eval_dataloader)
+            epoch_output_dir = os.path.join(
+                args.output_dir, 'epoch_%d_%.4f_%.4f' %
+                (epoch, eval_scores['loss'], eval_scores['acc']))
             if not os.path.exists(epoch_output_dir):
                 os.makedirs(epoch_output_dir)
 
-            if epoch > args.save_from_epoch and (eval_scores['acc'] >= best_acc or args.save_all_models):
-                output_model_file = os.path.join(epoch_output_dir, WEIGHTS_NAME)
-                output_config_file = os.path.join(epoch_output_dir, CONFIG_NAME)
-                model_to_save = model.module if hasattr(model, 'module') else model
+            if epoch > args.save_from_epoch and (eval_scores['acc'] >= best_acc
+                                                 or args.save_all_models):
+                output_model_file = os.path.join(epoch_output_dir,
+                                                 WEIGHTS_NAME)
+                output_config_file = os.path.join(epoch_output_dir,
+                                                  CONFIG_NAME)
+                model_to_save = model.module if hasattr(model,
+                                                        'module') else model
                 torch.save(model_to_save.state_dict(), output_model_file)
                 model_to_save.config.to_json_file(output_config_file)
                 tokenizer.save_vocabulary(epoch_output_dir)
 
-            with open(os.path.join(epoch_output_dir, "eval_scores.txt"), "w") as writer:
+            with open(os.path.join(epoch_output_dir, "eval_scores.txt"),
+                      "w") as writer:
                 logger.info("***** Eval scores *****")
                 for key in sorted(eval_scores.keys()):
                     logger.info("  %s = %s", key, str(eval_scores[key]))
                     writer.write("%s = %s\n" % (key, str(eval_scores[key])))
 
-            with open(os.path.join(epoch_output_dir, "pred_sql.txt"), 'wt') as out:
-                out.writelines([' '.join(pred_sql) + "\n" for pred_sql in pred_sqls])
+            with open(os.path.join(epoch_output_dir, "pred_sql.txt"),
+                      'wt') as out:
+                out.writelines(
+                    [' '.join(pred_sql) + "\n" for pred_sql in pred_sqls])
 
             if not args.base and not args.oracle:
-                pred_details = dataset.print_result(args.data_dir, pred_links, pred_sqls)
-                with open(os.path.join(epoch_output_dir, "pred_details.json"), 'wt') as out:
-                    json.dump(pred_details, out, sort_keys=True, indent=4, separators=(',', ': '))
+                pred_details = dataset.print_result(args.data_dir, pred_links,
+                                                    pred_sqls)
+                with open(os.path.join(epoch_output_dir, "pred_details.json"),
+                          'wt') as out:
+                    json.dump(pred_details,
+                              out,
+                              sort_keys=True,
+                              indent=4,
+                              separators=(',', ': '))
 
             best_acc = max(best_acc, eval_scores['acc'])
             logger.info("***** best acc = %.4f *****", best_acc)
@@ -397,25 +496,40 @@ if __name__ == '__main__':
 
     if args.do_eval:
         model.to(device)
-        eval_scores, pred_links, pred_sqls = eval(eval_examples, eval_features, eval_dataloader)
+        eval_scores, pred_links, pred_sqls = eval(eval_examples, eval_features,
+                                                  eval_dataloader)
 
-        eval_output_dir = os.path.join(args.output_dir, 'eval_%.4f' % (eval_scores['acc']))
+        eval_output_dir = os.path.join(args.output_dir,
+                                       'eval_%.4f' % (eval_scores['acc']))
         if not os.path.exists(eval_output_dir):
             os.makedirs(eval_output_dir)
 
-        with open(os.path.join(eval_output_dir, "eval_scores.txt"), "w") as writer:
+        with open(os.path.join(eval_output_dir, "eval_scores.txt"),
+                  "w") as writer:
             logger.info("***** Eval scores *****")
             for key in sorted(eval_scores.keys()):
                 logger.info("  %s = %s", key, str(eval_scores[key]))
                 writer.write("%s = %s\n" % (key, str(eval_scores[key])))
 
-        with open(os.path.join(eval_output_dir, "eval_scores.json"), 'wt') as out:
-            json.dump(eval_scores, out, sort_keys=True, indent=4, separators=(',', ': '))
+        with open(os.path.join(eval_output_dir, "eval_scores.json"),
+                  'wt') as out:
+            json.dump(eval_scores,
+                      out,
+                      sort_keys=True,
+                      indent=4,
+                      separators=(',', ': '))
 
         with open(os.path.join(eval_output_dir, "pred_sql.txt"), 'wt') as out:
-            out.writelines([' '.join(pred_sql) + "\n" for pred_sql in pred_sqls])
+            out.writelines(
+                [' '.join(pred_sql) + "\n" for pred_sql in pred_sqls])
 
         if not args.base and not args.oracle:
-            pred_details = dataset.print_result(args.data_dir, pred_links, pred_sqls)
-            with open(os.path.join(eval_output_dir, "pred_details.json"), 'wt') as out:
-                json.dump(pred_details, out, sort_keys=True, indent=4, separators=(',', ': '))
+            pred_details = dataset.print_result(args.data_dir, pred_links,
+                                                pred_sqls)
+            with open(os.path.join(eval_output_dir, "pred_details.json"),
+                      'wt') as out:
+                json.dump(pred_details,
+                          out,
+                          sort_keys=True,
+                          indent=4,
+                          separators=(',', ': '))
